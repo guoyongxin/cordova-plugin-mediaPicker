@@ -4,7 +4,7 @@
 #import "DmcPickerViewController.h"
 @interface MediaPicker : CDVPlugin <DmcPickerDelegate>{
   // Member variables go here.
-    NSString* callbackId;
+//    NSString* callbackId;
 }
 
 - (void)getMedias:(CDVInvokedUrlCommand*)command;
@@ -17,9 +17,12 @@
 
 - (void)getMedias:(CDVInvokedUrlCommand*)command
 {
-    callbackId=command.callbackId;
+//    callbackId=command.callbackId;
+    [self.commandDelegate runInBackground:^{
+        
+    }];
     NSDictionary *options = [command.arguments objectAtIndex: 0];
-    DmcPickerViewController * dmc=[[DmcPickerViewController alloc] init];
+    DmcPickerViewController * dmc=[[DmcPickerViewController alloc] initWithCallbackId:command.callbackId];
     @try{
         dmc.selectMode=[[options objectForKey:@"selectMode"]integerValue];
     }@catch (NSException *exception) {
@@ -30,43 +33,49 @@
     }@catch (NSException *exception) {
         NSLog(@"Exception: %@", exception);
     }
-    dmc._delegate=self;
-    [self.viewController presentViewController:[[UINavigationController alloc]initWithRootViewController:dmc] animated:YES completion:nil];
+    dmc._delegate = self;
+    UINavigationController* nav = [[UINavigationController alloc]initWithRootViewController:dmc];
+    [self.viewController presentViewController:nav animated:YES completion:nil];
 }
 
--(void) resultPicker:(NSMutableArray*) selectArray
+//- (void)resultPicker:(NSMutableArray *)selectArray withCallback:(NSString *)callbackId
+-(void) resultPicker:(NSMutableArray*) selectArray withCallback:(NSString*)callbackId
 {
+    [self.viewController dismissViewControllerAnimated:YES completion:nil];
     
-    NSString * tmpDir = NSTemporaryDirectory();
-    NSString *dmcPickerPath = [tmpDir stringByAppendingPathComponent:@"dmcPicker"];
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    if(![fileManager fileExistsAtPath:dmcPickerPath ]){
-       [fileManager createDirectoryAtPath:dmcPickerPath withIntermediateDirectories:YES attributes:nil error:nil];
-    }
-    
-    NSMutableArray * aListArray=[[NSMutableArray alloc] init];
-    if([selectArray count]<=0){
-        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:aListArray] callbackId:callbackId];
-        return;
-    }
-
-    dispatch_async(dispatch_get_global_queue (DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        int index=0;
-        for(PHAsset *asset in selectArray){
-            @autoreleasepool {
-                if(asset.mediaType==PHAssetMediaTypeImage){
-                    [self imageToSandbox:asset dmcPickerPath:dmcPickerPath aListArray:aListArray selectArray:selectArray index:index];
-                }else{
-                    [self videoToSandboxCompress:asset dmcPickerPath:dmcPickerPath aListArray:aListArray selectArray:selectArray index:index];
-                }
-            }
-            index++;
+    [self.commandDelegate runInBackground:^{
+        NSString * tmpDir = NSTemporaryDirectory();
+        NSString *dmcPickerPath = [tmpDir stringByAppendingPathComponent:@"dmcPicker"];
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        if(![fileManager fileExistsAtPath:dmcPickerPath ]){
+            [fileManager createDirectoryAtPath:dmcPickerPath withIntermediateDirectories:YES attributes:nil error:nil];
         }
-    });
+        
+        NSMutableArray * aListArray=[[NSMutableArray alloc] init];
+        if([selectArray count]<=0){
+            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:aListArray] callbackId: callbackId];
+            return;
+        }
+        
+        dispatch_async(dispatch_get_global_queue (DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            int index=0;
+            for(PHAsset *asset in selectArray){
+                @autoreleasepool {
+                    if(asset.mediaType==PHAssetMediaTypeImage){
+                        [self imageToSandbox:asset dmcPickerPath:dmcPickerPath aListArray:aListArray selectArray:selectArray index:index callbackId: callbackId];
+                    }else{
+                        [self videoToSandboxCompress:asset dmcPickerPath:dmcPickerPath aListArray:aListArray selectArray:selectArray index:index callbackId:callbackId];
+                    }
+                }
+                index++;
+            }
+        });
+    }];
+   
 
 }
 
--(void)imageToSandbox:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index{
+-(void)imageToSandbox:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index callbackId: (NSString*)callbackId{
     PHImageRequestOptions *options = [[PHImageRequestOptions alloc] init];
     options.networkAccessAllowed = YES;
     options.resizeMode = PHImageRequestOptionsResizeModeFast;
@@ -76,6 +85,16 @@
     };
     [[PHImageManager defaultManager] requestImageDataForAsset:asset  options:options resultHandler:^(NSData * _Nullable imageData, NSString * _Nullable dataUTI, UIImageOrientation orientation, NSDictionary * _Nullable info) {
         NSString *filename=[asset valueForKey:@"filename"];
+        NSLog(@"Selected file is %@, UTI %@", filename, dataUTI);
+        if([dataUTI isEqualToString:@"public.heic"] || [dataUTI isEqualToString:@"public.heif"]) {
+//            UIImage* img = [UIImage imageWithData:imageData];
+//            imageData = UIImageJPEGRepresentation(img, 1.0);
+            CIImage *ciImage = [CIImage imageWithData:imageData];
+            CIContext *context = [CIContext context];
+            imageData = [context JPEGRepresentationOfImage:ciImage colorSpace:ciImage.colorSpace options:@{}];
+            filename = [filename stringByReplacingOccurrencesOfString:@"HEIC" withString:@"JPG" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [filename length])];
+            filename = [filename stringByReplacingOccurrencesOfString:@"HEIF" withString:@"JPG" options:NSCaseInsensitiveSearch range:NSMakeRange(0, [filename length])];
+        }
         NSString *fullpath=[NSString stringWithFormat:@"%@/%@%@", dmcPickerPath,[[NSProcessInfo processInfo] globallyUniqueString], filename];
         NSNumber *size=[NSNumber numberWithLong:imageData.length];
 
@@ -97,7 +116,7 @@
 
 - (void)getExifForKey:(CDVInvokedUrlCommand*)command
 {
-    callbackId=command.callbackId;
+//    callbackId=command.callbackId;
     NSString *path= [command.arguments objectAtIndex: 0];
     NSString *key  = [command.arguments objectAtIndex: 1];
 
@@ -110,13 +129,13 @@
     NSDictionary  *nsdic = (__bridge_transfer  NSDictionary*)imageInfo;
     NSString* orientation=[nsdic objectForKey:key];
    
-    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:orientation] callbackId:callbackId];
+    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:orientation] callbackId:command.callbackId];
 
 
 }
 
 
--(void)videoToSandbox:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index{
+-(void)videoToSandbox:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index callbackId:(NSString*) callbackId{
     PHImageRequestOptions *options = [[PHImageRequestOptions alloc] init];
     options.networkAccessAllowed = YES;
     options.resizeMode = PHImageRequestOptionsResizeModeFast;
@@ -152,7 +171,7 @@
 
 }
 
--(void)videoToSandboxCompress:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index{
+-(void)videoToSandboxCompress:(PHAsset *)asset dmcPickerPath:(NSString*)dmcPickerPath aListArray:(NSMutableArray*)aListArray selectArray:(NSMutableArray*)selectArray index:(int)index callbackId:(NSString*) callbackId{
     NSString *compressStartjs = [NSString stringWithFormat:@"MediaPicker.compressEvent('%@',%i)", @"start",index];
     [self.commandDelegate evalJs:compressStartjs];
     [[PHImageManager defaultManager] requestExportSessionForVideo:asset options:nil exportPreset:AVAssetExportPresetMediumQuality resultHandler:^(AVAssetExportSession *exportSession, NSDictionary *info) {
@@ -260,49 +279,51 @@
 
 - (void)extractThumbnail:(CDVInvokedUrlCommand*)command
 {
-    callbackId=command.callbackId;
+//    callbackId=command.callbackId;
     NSMutableDictionary *options = [command.arguments objectAtIndex: 0];
     UIImage * image=[self getThumbnailImage:[options objectForKey:@"path"] type:[options objectForKey:@"mediaType"]];
     NSString *thumbnail=[self thumbnailImage:image quality:[[options objectForKey:@"thumbnailQuality"] integerValue]];
 
     [options setObject:thumbnail forKey:@"thumbnailBase64"];
-    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId:callbackId];
+    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId: command.callbackId];
 }
 
 - (void)compressImage:(CDVInvokedUrlCommand*)command
 {
-    callbackId=command.callbackId;
-    NSMutableDictionary *options = [command.arguments objectAtIndex: 0];
-
-    NSInteger quality=[[options objectForKey:@"quality"] integerValue];
-    if(quality<100&&[@"image" isEqualToString: [options objectForKey:@"mediaType"]]){
-        UIImage *result = [[UIImage alloc] initWithContentsOfFile: [options objectForKey:@"path"]];
-        NSInteger qu = quality>0?quality:3;
-        CGFloat q=qu/100.0f;
-        NSData *data =UIImageJPEGRepresentation(result,q);
-        NSString *dmcPickerPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dmcPicker"];
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-        if(![fileManager fileExistsAtPath:dmcPickerPath ]){
-           [fileManager createDirectoryAtPath:dmcPickerPath withIntermediateDirectories:YES attributes:nil error:nil];
-        }
-        NSString *filename=[NSString stringWithFormat:@"%@%@%@",@"dmcMediaPickerCompress", [self currentTimeStr],@".jpg"];
-        NSString *fullpath=[NSString stringWithFormat:@"%@/%@", dmcPickerPath,filename];
-        NSNumber* size=[NSNumber numberWithLong: data.length];
-        NSError *error = nil;
-        if (![data writeToFile:fullpath options:NSAtomicWrite error:&error]) {
-            NSLog(@"%@", [error localizedDescription]);
-            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:callbackId];
-        } else {
-            [options setObject:fullpath forKey:@"path"];
-            [options setObject:[[NSURL fileURLWithPath:fullpath] absoluteString] forKey:@"uri"];
-            [options setObject:size forKey:@"size"];
-            [options setObject:filename forKey:@"name"];
-            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId:callbackId];
-        }        
+//    callbackId=command.callbackId;
+    [self.commandDelegate runInBackground:^{
+        NSMutableDictionary *options = [command.arguments objectAtIndex: 0];
         
-    }else{
-        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId:callbackId];
-    }
+        NSInteger quality=[[options objectForKey:@"quality"] integerValue];
+        if(quality<100&&[@"image" isEqualToString: [options objectForKey:@"mediaType"]]){
+            UIImage *result = [[UIImage alloc] initWithContentsOfFile: [options objectForKey:@"path"]];
+            NSInteger qu = quality>0?quality:3;
+            CGFloat q=qu/100.0f;
+            NSData *data =UIImageJPEGRepresentation(result,q);
+            NSString *dmcPickerPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dmcPicker"];
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            if(![fileManager fileExistsAtPath:dmcPickerPath ]){
+                [fileManager createDirectoryAtPath:dmcPickerPath withIntermediateDirectories:YES attributes:nil error:nil];
+            }
+            NSString *filename=[NSString stringWithFormat:@"%@%@%@",@"dmcMediaPickerCompress", [self currentTimeStr],@".jpg"];
+            NSString *fullpath=[NSString stringWithFormat:@"%@/%@", dmcPickerPath,filename];
+            NSNumber* size=[NSNumber numberWithLong: data.length];
+            NSError *error = nil;
+            if (![data writeToFile:fullpath options:NSAtomicWrite error:&error]) {
+                NSLog(@"%@", [error localizedDescription]);
+                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId: command.callbackId];
+            } else {
+                [options setObject:fullpath forKey:@"path"];
+                [options setObject:[[NSURL fileURLWithPath:fullpath] absoluteString] forKey:@"uri"];
+                [options setObject:size forKey:@"size"];
+                [options setObject:filename forKey:@"name"];
+                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId: command.callbackId];
+            }
+        }else{
+            [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:options] callbackId: command.callbackId];
+        }
+    }];
+    
 }
 
 //获取当前时间戳
@@ -316,9 +337,11 @@
 
 -(void)fileToBlob:(CDVInvokedUrlCommand*)command
 {
-    callbackId=command.callbackId;
-    NSData *result =[NSData dataWithContentsOfFile:[command.arguments objectAtIndex: 0]];
-    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArrayBuffer:result]callbackId:command.callbackId];
+//    callbackId=command.callbackId;
+    [self.commandDelegate runInBackground:^{
+        NSData *result =[NSData dataWithContentsOfFile:[command.arguments objectAtIndex: 0]];
+        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArrayBuffer:result]callbackId:command.callbackId];
+    }];
 }
 
 
